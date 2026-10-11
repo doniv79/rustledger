@@ -2183,3 +2183,182 @@ fn test_extract_orders_each_file_on_its_own() {
         "{appended}"
     );
 }
+
+/// A build without the plugin runtimes (a release binary) says so, and names
+/// the build that has them, for every way of asking for one: a `.py` and a
+/// `.wasm` `plugin` directive, `check --plugin` (rejected by clap as an
+/// unknown argument before #2541) and `extract --wasm-importer` /
+/// `--wasm-importer-dir` (accepted and ignored before, so the run reported
+/// only that nothing was extracted).
+#[cfg(not(feature = "python-plugin-wasm"))]
+#[test]
+fn release_build_names_the_build_with_plugin_runtimes() {
+    let rledger = require_rledger!();
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+    // Never loaded: the build has no runtime to load it with.
+    std::fs::write(dir.join("passthrough.wasm"), b"\0asm").expect("write wasm");
+    std::fs::write(dir.join("p.py"), "__plugins__ = []\n").expect("write");
+    std::fs::create_dir(dir.join("importers")).expect("mkdir");
+    std::fs::write(dir.join("s.csv"), "date,amount\n").expect("write");
+    let open = "2024-01-01 open Assets:Cash\n";
+    std::fs::write(dir.join("plain.beancount"), open).expect("write");
+    for (name, header) in [
+        ("py", "plugin \"p.py\""),
+        ("wasm", "plugin \"passthrough.wasm\""),
+    ] {
+        std::fs::write(
+            dir.join(format!("{name}.beancount")),
+            format!("{header}\n{open}"),
+        )
+        .expect("write");
+    }
+    let cases: [&[&str]; 5] = [
+        &["check", "--no-cache", "py.beancount"],
+        &["check", "--no-cache", "wasm.beancount"],
+        &[
+            "check",
+            "--no-cache",
+            "--plugin",
+            "passthrough.wasm",
+            "plain.beancount",
+        ],
+        &[
+            "extract",
+            "--wasm-importer",
+            "passthrough.wasm",
+            "-a",
+            "Assets:Cash",
+            "s.csv",
+        ],
+        &[
+            "extract",
+            "--wasm-importer-dir",
+            "importers",
+            "-a",
+            "Assets:Cash",
+            "s.csv",
+        ],
+    ];
+    for args in cases {
+        let output = Command::new(&rledger)
+            .args(args)
+            .current_dir(dir)
+            .env("RLEDGER_CONFIG_DIR", dir)
+            .output()
+            .expect("run rledger");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.status.success(), "{args:?} succeeded:\n{text}");
+        assert!(
+            text.contains("release binaries ship without")
+                && text.contains("cargo install rustledger"),
+            "{args:?} does not name the build with plugin runtimes:\n{text}"
+        );
+    }
+}
+
+/// A slim build accepts `wasm_importer_dir` in `importers.toml` silently
+/// (one file may serve full builds too), but says the WASM importers there
+/// were not tried wherever that matters: an error that no importer matched
+/// or that nothing was extracted, a warning when a CSV entry read the file
+/// instead (a full build offers it to the WASM importers first), and
+/// `--list-importers` (#2541). Before, all of these were silent.
+#[cfg(not(feature = "python-plugin-wasm"))]
+#[test]
+fn release_build_names_the_wasm_importers_it_did_not_try() {
+    let rledger = require_rledger!();
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+    std::fs::create_dir(dir.join("imp")).expect("mkdir");
+    std::fs::write(dir.join("imp/bank.wasm"), b"\0asm").expect("write wasm");
+    let run = |args: &[&str]| {
+        let output = Command::new(&rledger)
+            .args(args)
+            .current_dir(dir)
+            .env("RLEDGER_CONFIG_DIR", dir)
+            .output()
+            .expect("run rledger");
+        (
+            output.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        )
+    };
+    let note = "no WASM runtime, so the WASM importer in imp (bank.wasm) was not tried; \
+                `cargo install rustledger` includes it";
+    std::fs::write(dir.join("statement.dat"), "not a statement\n").expect("write");
+    std::fs::write(
+        dir.join("bank.csv"),
+        "Date,Description,Amount\n2024-01-05,Coffee,-3.50\n",
+    )
+    .expect("write");
+
+    // No entry matches, several defined: the error says what was not tried.
+    std::fs::write(
+        dir.join("two.toml"),
+        "wasm_importer_dir = \"imp\"\n\n\
+         [[importers]]\nname = \"a\"\naccount = \"Assets:A\"\nfilename_pattern = \"a*.csv\"\n\n\
+         [[importers]]\nname = \"b\"\naccount = \"Assets:B\"\nfilename_pattern = \"b*.txt\"\n",
+    )
+    .expect("write");
+    let (ok, text) = run(&["extract", "--config", "two.toml", "statement.dat"]);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("No importer matches file 'statement.dat'"),
+        "{text}"
+    );
+    assert!(text.contains(note), "{text}");
+
+    // One CSV entry matches the file: it is imported, with a warning
+    // naming the WASM importer a full build would have offered it to.
+    std::fs::write(
+        dir.join("csv.toml"),
+        "wasm_importer_dir = \"imp\"\n\n\
+         [[importers]]\nname = \"bank\"\naccount = \"Assets:Bank\"\nfilename_pattern = \"*.csv\"\n\
+         date_column = \"Date\"\namount_column = \"Amount\"\ndate_format = \"%Y-%m-%d\"\ncurrency = \"USD\"\n",
+    )
+    .expect("write");
+    let (ok, text) = run(&["extract", "--config", "csv.toml", "bank.csv"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Coffee"), "{text}");
+    assert!(
+        text.contains(
+            "warning: bank.csv was read by importers.toml entry 'bank', but this rledger"
+        ),
+        "{text}"
+    );
+    assert!(text.contains(note), "{text}");
+    // Named with --importer, the entry is read by its own parser in any
+    // build: nothing to say.
+    let (ok, text) = run(&[
+        "extract",
+        "--config",
+        "csv.toml",
+        "--importer",
+        "bank",
+        "bank.csv",
+    ]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("WASM runtime"), "{text}");
+
+    // Nothing extracted, with the importers.toml found implicitly.
+    std::fs::write(dir.join("importers.toml"), "wasm_importer_dir = \"imp\"\n").expect("write");
+    let (ok, text) = run(&["extract", "-a", "Assets:Bank", "statement.dat"]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("no transactions were extracted"), "{text}");
+    assert!(text.contains(note), "{text}");
+
+    let (ok, text) = run(&["extract", "--list-importers"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains(&format!("(not loaded: this rledger has {note})")),
+        "{text}"
+    );
+}
