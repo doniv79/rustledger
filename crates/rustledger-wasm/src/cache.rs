@@ -234,7 +234,12 @@ use crate::types::{Error, LedgerOptions};
 /// instead of dropped (#2627). Loader v38, unchanged -- parsed directives did
 /// not move. A restored `Ledger` skips booking and serves its cached errors,
 /// so a v40 blob of such a ledger would go on reporting none.
-pub const CACHE_VERSION: u32 = 41;
+/// v42: `noduplicates` compares every directive type but `price`, not only
+/// transactions (#2599). Loader v38, unchanged -- parsed directives did not
+/// move. `Ledger` runs the regular plugins and archives their errors, so a
+/// v41 blob of a ledger with a repeated `note` (or `open`, `balance`, ...)
+/// would serve no error where `noduplicates` now reports one.
+pub const CACHE_VERSION: u32 = 42;
 
 /// The `rustledger-loader` cache version this one was last reconciled with.
 ///
