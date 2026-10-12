@@ -230,7 +230,11 @@ use crate::types::{Error, LedgerOptions};
 /// split's own units (#2569). Loader v38, unchanged -- parsed directives did
 /// not move. `Ledger` archives booked directives, so a v39 blob would serve
 /// the old, multiplied price.
-pub const CACHE_VERSION: u32 = 40;
+/// v41: a date or label written on an AVERAGE sale's cost spec is refused
+/// instead of dropped (#2627). Loader v38, unchanged -- parsed directives did
+/// not move. A restored `Ledger` skips booking and serves its cached errors,
+/// so a v40 blob of such a ledger would go on reporting none.
+pub const CACHE_VERSION: u32 = 41;
 
 /// The `rustledger-loader` cache version this one was last reconciled with.
 ///
