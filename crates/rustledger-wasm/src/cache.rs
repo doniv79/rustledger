@@ -247,7 +247,12 @@ use crate::types::{Error, LedgerOptions};
 /// (#2576). Loader v39, unchanged -- parsed directives did not move. `Ledger`
 /// archives the processed, sorted directives, so a v43 blob would serve the
 /// old order (a same-date `custom` after the date's transactions and `close`).
-pub const CACHE_VERSION: u32 = 44;
+/// v45: a sale written with its units elided is booked as the same sale
+/// with its units written: its lots are matched and its disposal recorded,
+/// and an AVERAGE one carries the pool's exact cost (#2647). Loader v39,
+/// unchanged -- parsed directives did not move. `Ledger` archives booked
+/// directives, so a v44 blob would serve the old, unmatched posting.
+pub const CACHE_VERSION: u32 = 45;
 
 /// The `rustledger-loader` cache version this one was last reconciled with.
 ///
