@@ -89,8 +89,16 @@ pub(super) const DOCUMENTS_COLUMNS: &[ColumnInfo] = &[
 /// The columns of `#accounts`. `currencies` and `booking` are rledger's own.
 pub(super) const ACCOUNTS_COLUMNS: &[ColumnInfo] = &[
     col("account", "str", "Account name"),
-    col("open", "date", "Date the account was opened"),
-    col("close", "date", "Date the account was closed, else NULL"),
+    col(
+        "open",
+        "open",
+        "The account's `open` directive, structured (NULL if none)",
+    ),
+    col(
+        "close",
+        "close",
+        "The account's `close` directive, structured (NULL if still open)",
+    ),
     col("currencies", "set", "Currencies the account allows"),
     col("booking", "str", "Booking method, else NULL"),
 ];
@@ -609,47 +617,49 @@ impl Executor<'_> {
     ///
     /// The table has columns: account, open, close, currencies, booking
     /// - account: The account name
-    /// - open: The date the account was opened
-    /// - close: The date the account was closed (NULL if still open)
+    /// - open: The account's `open` directive, structured (NULL if none)
+    /// - close: The account's `close` directive, structured (NULL if still open)
     /// - currencies: Allowed currencies for the account
     /// - booking: Booking method (NULL if not specified)
+    ///
+    /// `open` and `close` are the directives, as bean-query's `Open` and
+    /// `Close` structures are, so `open.date` and `close.date` read their
+    /// dates (#2700). They used to be the bare dates, which left nothing to
+    /// take an attribute of. See [`Self::open_object`] for their fields.
+    /// `currencies` and `booking` repeat `open.currencies` and
+    /// `open.booking`; bean-query has no such columns, and they stay for the
+    /// queries written against them.
+    ///
+    /// An account opened or closed twice keeps its EARLIEST directive of
+    /// each kind, the first of them on a tie, as beancount's
+    /// `get_account_open_close` does.
     pub(super) fn build_accounts_table(&self) -> Table {
+        // A directive with its source location, while the earliest is chosen.
+        type Located<'d, T> = Option<(&'d T, Option<&'d SourceLocation>)>;
         let columns = column_names(ACCOUNTS_COLUMNS);
         let mut table = Table::new(columns);
 
-        // Build a map of account name -> (open_date, close_date, currencies, booking)
         let mut accounts: FxHashMap<
             &str,
             (
-                Option<rustledger_core::NaiveDate>,
-                Option<rustledger_core::NaiveDate>,
-                Vec<String>,
-                Option<&str>,
+                Located<'_, rustledger_core::Open>,
+                Located<'_, rustledger_core::Close>,
             ),
         > = FxHashMap::default();
 
-        // Process directives
-        for directive in self.resolved_directives() {
+        for (idx, directive) in self.resolved_directives().enumerate() {
             match directive {
                 Directive::Open(open) => {
-                    let entry = accounts.entry(open.account.as_ref()).or_insert((
-                        None,
-                        None,
-                        Vec::new(),
-                        None,
-                    ));
-                    entry.0 = Some(open.date);
-                    entry.2 = open.currencies.iter().map(ToString::to_string).collect();
-                    entry.3 = open.booking.as_deref();
+                    let entry = accounts.entry(open.account.as_ref()).or_default();
+                    if entry.0.is_none_or(|(kept, _)| open.date < kept.date) {
+                        entry.0 = Some((open, self.get_source_location(idx)));
+                    }
                 }
                 Directive::Close(close) => {
-                    let entry = accounts.entry(close.account.as_ref()).or_insert((
-                        None,
-                        None,
-                        Vec::new(),
-                        None,
-                    ));
-                    entry.1 = Some(close.date);
+                    let entry = accounts.entry(close.account.as_ref()).or_default();
+                    if entry.1.is_none_or(|(kept, _)| close.date < kept.date) {
+                        entry.1 = Some((close, self.get_source_location(idx)));
+                    }
                 }
                 _ => {}
             }
@@ -659,18 +669,79 @@ impl Executor<'_> {
         let mut account_list: Vec<_> = accounts.into_iter().collect();
         account_list.sort_by_key(|(a, _)| *a);
 
-        for (account, (open_date, close_date, currencies, booking)) in account_list {
+        for (account, (open, close)) in account_list {
+            let currencies = open.map_or_else(Vec::new, |(o, _)| {
+                o.currencies.iter().map(ToString::to_string).collect()
+            });
+            let booking = open
+                .and_then(|(o, _)| o.booking.as_deref())
+                .map_or(Value::Null, |b| Value::String(b.to_string()));
             let row = vec![
                 Value::String(account.to_string()),
-                open_date.map_or(Value::Null, Value::Date),
-                close_date.map_or(Value::Null, Value::Date),
+                open.map_or(Value::Null, |(o, loc)| Self::open_object(o, loc)),
+                close.map_or(Value::Null, |(c, loc)| Self::close_object(c, loc)),
                 Value::StringSet(currencies),
-                booking.map_or(Value::Null, |b| Value::String(b.to_string())),
+                booking,
             ];
             table.add_row(row);
         }
 
         table
+    }
+
+    /// An `open` directive as bean-query's `Open` structure: the fields of
+    /// beancount's `Open` namedtuple, `meta`, `date`, `account`, `currencies`
+    /// and `booking` (each of the last two NULL when the directive names
+    /// none). `meta` carries
+    /// the source location, as `entry.meta` does.
+    fn open_object(open: &rustledger_core::Open, loc: Option<&SourceLocation>) -> Value {
+        let mut obj = Self::directive_object(&open.meta, loc, open.date, &open.account);
+        // NULL for an `open` that names no currencies: beancount stores None
+        // there, not an empty list, so bean-query's `open.currencies IS NULL`
+        // is TRUE for it. (The legacy `currencies` column keeps its empty set.)
+        obj.insert(
+            "currencies".to_string(),
+            if open.currencies.is_empty() {
+                Value::Null
+            } else {
+                Value::StringSet(open.currencies.iter().map(ToString::to_string).collect())
+            },
+        );
+        obj.insert(
+            "booking".to_string(),
+            open.booking
+                .as_deref()
+                .map_or(Value::Null, |b| Value::String(b.to_string())),
+        );
+        Value::Object(Box::new(obj))
+    }
+
+    /// A `close` directive as bean-query's `Close` structure: `meta`, `date`
+    /// and `account`.
+    fn close_object(close: &rustledger_core::Close, loc: Option<&SourceLocation>) -> Value {
+        Value::Object(Box::new(Self::directive_object(
+            &close.meta,
+            loc,
+            close.date,
+            &close.account,
+        )))
+    }
+
+    /// The fields an `open` and a `close` share.
+    fn directive_object(
+        meta: &rustledger_core::Metadata,
+        loc: Option<&SourceLocation>,
+        date: rustledger_core::NaiveDate,
+        account: &str,
+    ) -> std::collections::BTreeMap<String, Value> {
+        let mut obj = std::collections::BTreeMap::new();
+        obj.insert(
+            "meta".to_string(),
+            Self::metadata_to_value(&Self::augmented_meta(meta, loc)),
+        );
+        obj.insert("date".to_string(), Value::Date(date));
+        obj.insert("account".to_string(), Value::String(account.to_string()));
+        obj
     }
 
     /// Build the #transactions table from transaction directives.
