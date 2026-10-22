@@ -3370,6 +3370,7 @@ dependencies = [
  "blake3",
  "glob",
  "jiff",
+ "parking_lot",
  "rayon",
  "rkyv",
  "rust_decimal",
