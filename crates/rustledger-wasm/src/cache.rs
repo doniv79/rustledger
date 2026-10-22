@@ -288,19 +288,17 @@ use crate::types::{Error, LedgerOptions};
 /// out of range (#2689). Loader v41, unchanged -- parsed directives did not
 /// move. `Ledger` archives booked directives and errors, so a v51 blob would
 /// serve the refusal and the posting left unbooked.
-/// v54: the directives `check_closing`, `close_tree` and document discovery
-/// create carry the placeholder location beancount gives them, and an error
-/// on one names it (`<check_closing>:0`) instead of `<unknown>` (#2713).
-/// Loader v41, unchanged -- parsed directives did not move; the placeholder
-/// file id is assigned where the plugin's insert is applied. What moved is
-/// `Ledger`'s error list: each such error now has `file`, `line` and
-/// `column`. A v52 blob would hand those errors back with no location, so
-/// the fix would silently not apply to a cached ledger (the v22 shape). The
-/// v53 slot is taken by the parallel `fix/tolerance-cost-cap` branch (#2717),
-/// which bumps the version for its own change; the two must keep DISTINCT
-/// numbers, so a blob written between the two merges is regenerated whichever
-/// lands second.
-pub const CACHE_VERSION: u32 = 54;
+/// v55: a sale past the end of a lot its own transaction emptied is dated
+/// with the transaction's date, as beancount dates it (#2390). Loader v41,
+/// unchanged -- parsed directives did not move. `Ledger` archives booked
+/// directives, so a v52 blob would serve the short's cost left undated. The
+/// recorded `Posting::booking` decisions are NOT archived (they are skipped
+/// by serde and rkyv), so a restored `Ledger` re-derives each one as before
+/// #2390; this bump is for the dated short. v53 landed with `fix/tolerance-cost-cap`
+/// (#2717) and v54 with `fix/plugin-placeholder-locations` (#2713); the
+/// bumps kept DISTINCT numbers, so a blob written between the merges is
+/// regenerated.
+pub const CACHE_VERSION: u32 = 55;
 
 /// The `rustledger-loader` cache version this one was last reconciled with.
 ///
