@@ -1,17 +1,6 @@
 [
   {
     "date": "2026-08-08",
-    "timestamp": "2026-08-08T04:34:54Z",
-    "check_match_pct": 100,
-    "accounts_pct": 100,
-    "posting_pct": 100,
-    "error_pct": 100,
-    "full_pct": 100,
-    "bql_pct": 94,
-    "regression_count": 0
-  },
-  {
-    "date": "2026-08-08",
     "timestamp": "2026-08-08T05:12:12Z",
     "check_match_pct": 100,
     "accounts_pct": 100,
@@ -1057,6 +1046,18 @@
   {
     "date": "2026-11-15",
     "timestamp": "2026-11-15T10:30:59Z",
+    "check_match_pct": 100,
+    "accounts_pct": 100,
+    "posting_pct": 100,
+    "error_pct": 100,
+    "full_pct": 100,
+    "bql_pct": 100,
+    "bql_runs": 12882,
+    "regression_count": 0
+  },
+  {
+    "date": "2026-11-16",
+    "timestamp": "2026-11-16T10:47:54Z",
     "check_match_pct": 100,
     "accounts_pct": 100,
     "posting_pct": 100,
